@@ -1,0 +1,19 @@
+on:
+  push:
+    branches:
+      - main
+jobs:
+  pipeline-cd:
+    name: Build and Push
+    runs-on: ubuntu-latest
+    env:
+      KUBECTL: "kubectl --insecure-skip-tls-verify=true --server=${{ vars.K8S_API_SERVER }} --token=${{ secrets.KUBERNETES_TOKEN }}"
+
+    steps:
+      - name: Checkout master
+        uses: actions/checkout@master
+
+      - name: Update/Create K8S App
+        run: |
+          kubectl create namespace goapp --dry-run=client -o yaml | ${{ env.KUBECTL }} apply -f -
+          ${{ env.KUBECTL }} apply -f k8s/

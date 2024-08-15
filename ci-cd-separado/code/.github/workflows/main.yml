@@ -1,0 +1,47 @@
+on:
+  push:
+    branches:
+      - main
+jobs:
+  pipeline-ci:
+    name: Build and Push
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Build container image
+        run: docker build -t ${{ vars.DOCKER_REPO }}:CODE-$GITHUB_REF_NAME-$GITHUB_RUN_NUMBER .
+
+      - name: Docker Login
+        env:
+          DOCKER_USERNAME: ${{ vars.DOCKER_USERNAME }}
+          DOCKER_PASSWORD: ${{ secrets.DOCKER_PASSWORD }}
+        run: docker login -u $DOCKER_USERNAME -p $DOCKER_PASSWORD
+
+      - name: Push image to Docker Hub
+        run: docker push ${{ vars.DOCKER_REPO }}:CODE-$GITHUB_REF_NAME-$GITHUB_RUN_NUMBER
+
+      - name: Checkout infra repo
+        uses: actions/checkout@master
+        with:
+          repository: paulovigne/webnar-pipeline-infra
+          ref: main
+          token: ${{ secrets.INFRA_GITREPO_TOKEN }}
+          path: infra
+
+      - name: Update Deployment
+        run: |
+          IMAGE=${{ vars.DOCKER_REPO }}:CODE-$GITHUB_REF_NAME-$GITHUB_RUN_NUMBER
+          sed -i 's|image:[ ].*|image: '$IMAGE'|' $GITHUB_WORKSPACE/infra/k8s/deployment.yaml
+
+      - name: Checkin infra repo
+        run: |
+          COMMIT=$(echo Modified by Code Pipeline - `date`)
+          cd $GITHUB_WORKSPACE/infra
+          git config --global user.name ${{ vars.INFRA_GITREPO_USERNAME }}
+          git config --global user.password ${{ secrets.INFRA_GITREPO_TOKEN }}
+          git config --global user.email "you@example.com"
+          git add .
+          git commit -m "$COMMIT"
+          git push

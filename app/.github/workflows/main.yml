@@ -1,0 +1,56 @@
+on:
+  push:
+    branches:
+      - main
+jobs:
+  pipeline-ci:
+    name: Build and Push
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Build container image
+        run: docker build -t ${{ vars.DOCKER_REPO }}:$GITHUB_REF_NAME-$GITHUB_RUN_NUMBER .
+
+      - name: Docker Login
+        env:
+          DOCKER_USERNAME: ${{ vars.DOCKER_USERNAME }}
+          DOCKER_PASSWORD: ${{ secrets.DOCKER_PASSWORD }}
+        run: docker login -u $DOCKER_USERNAME -p $DOCKER_PASSWORD
+
+      - name: Push image to Docker Hub
+        run: docker push ${{ vars.DOCKER_REPO }}:$GITHUB_REF_NAME-$GITHUB_RUN_NUMBER
+
+  pipeline-cd:
+    needs: pipeline-ci
+    name: Deploy to K8S
+    runs-on: ubuntu-latest
+    env:
+      KUBECTL: "kubectl --insecure-skip-tls-verify=true --server=${{ vars.K8S_API_SERVER }} --token=${{ secrets.KUBERNETES_TOKEN }}"
+      PORT: 8080
+      REPLICAS: 3
+    steps:
+      - name: Update/Create Namespace
+        run: |
+          kubectl create namespace ${{ vars.APPNAME }} --dry-run=client -o yaml |\
+          ${{ env.KUBECTL }} apply -f -
+
+      - name: Update/Create Deployment
+        run: |
+          TAG=$GITHUB_REF_NAME-$GITHUB_RUN_NUMBER && \
+          kubectl -n ${{ vars.K8S_NAMESPACE }} create deployment ${{ vars.APPNAME }} --image=${{ vars.DOCKER_REPO }}:$TAG --replicas=${{ env.REPLICAS }} \
+          --dry-run=client -o yaml |\
+          ${{ env.KUBECTL }} apply -f -
+
+      - name: Update/Create Service
+        run: |
+          kubectl -n ${{ vars.K8S_NAMESPACE }} create service clusterip ${{ vars.APPNAME }} --tcp=${{ env.PORT }}:${{ env.PORT }} \
+          --dry-run=client -o yaml |\
+          ${{ env.KUBECTL }} apply -f -
+
+      - name: Update/Create Ingress
+        run: |
+          kubectl -n ${{ vars.K8S_NAMESPACE }} create ingress ${{ vars.APPNAME }} --rule="${{ vars.K8S_INGRESS_HOST }}/*=${{ vars.APPNAME }}:${{ env.PORT }}" \
+          --dry-run=client -o yaml |\
+          ${{ env.KUBECTL }} apply -f -
